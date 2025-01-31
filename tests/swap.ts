@@ -11,7 +11,7 @@ import {
 import crypto from "crypto";
 
 // User A (swap.json) and User B (chaidex.json) keypairs
-const userA = Keypair.fromSecretKey(new Uint8Array(require("../chaidex.json")));
+const userA = Keypair.fromSecretKey(new Uint8Array(require("../swap.json")));
 const userB = Keypair.fromSecretKey(new Uint8Array(require("../chaidex.json")));
 
 // Replace with actual CT Token Mint address
@@ -145,6 +145,92 @@ describe("swap", () => {
         assert.equal(offerAccount.maker.toBase58(), userA.publicKey.toBase58());
         assert.equal(offerAccount.isNative, true);
         console.log("Offer stored for native deposit, id =", offerAccount.id.toString());
+    });
+
+    it("Deposit SPL Tokens (non-native)", async () => {
+        console.log("\n--- Now testing deposit_seller_spl ---");
+
+        const randomSeedSpl = crypto.randomBytes(4).readUInt32LE(0);
+        const offerIdSpl = new BN(randomSeedSpl);
+        console.log("Using SPL Offer ID:", offerIdSpl.toString());
+
+        // Derive PDAs
+        const idLEspl = offerIdSpl.toArrayLike(Buffer, "le", 8);
+
+        const [offerPdaSpl] = PublicKey.findProgramAddressSync(
+            [Buffer.from("offer-spl"), userA.publicKey.toBuffer(), idLEspl],
+            program.programId
+        );
+
+        const vaultSplAta = getAssociatedTokenAddressSync(
+            tokenMintA,
+            offerPdaSpl,
+            true, // allowOwnerOffCurve = true
+            TOKEN_PROGRAM_ID,
+            ASSOCIATED_TOKEN_PROGRAM_ID
+        );
+
+        console.log("Offer SPL PDA =", offerPdaSpl.toBase58());
+        console.log("Vault SPL ATA =", vaultSplAta.toBase58());
+
+        // We assume userA has a token account with at least 600 CT
+        const makerTokenAccountA = getAssociatedTokenAddressSync(
+            tokenMintA,
+            userA.publicKey,
+            false,
+            TOKEN_PROGRAM_ID,
+            ASSOCIATED_TOKEN_PROGRAM_ID
+        );
+
+        // Check userA’s balance before deposit
+        const makerTokenAccInfoBefore = await provider.connection.getTokenAccountBalance(makerTokenAccountA);
+        console.log(`User A CT token balance before deposit: ${makerTokenAccInfoBefore.value.uiAmount} CT`);
+
+        const tokenAOfferedAmount = new BN(11000000000); // 11 tokens
+        const tokenBWantedAmount = new BN(50_000000000); // 50 tokens
+
+        const txSPL = await program.methods.depositSellerSpl(
+            offerIdSpl,
+            tokenBWantedAmount,
+            tokenAOfferedAmount,
+        ).accounts({
+            maker: userA.publicKey,
+            tokenMintA: tokenMintA,
+            tokenMintB: tokenMintA,
+            makerTokenAccountA: makerTokenAccountA,
+            offer: offerPdaSpl,
+            vault: vaultSplAta,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        }).signers([userA]).rpc();
+
+        console.log("SPL deposit txn signature:", txSPL);
+
+        // Check userA’s balance after deposit
+        const makerTokenAccInfoAfter = await provider.connection.getTokenAccountBalance(makerTokenAccountA);
+        console.log(`User A CT token balance after deposit: ${makerTokenAccInfoAfter.value.uiAmount} CT`);
+
+        // Check vault balance
+        const vaultBalance = await provider.connection.getTokenAccountBalance(vaultSplAta);
+        console.log(`Vault CT token balance: ${vaultBalance.value.uiAmount} CT`);
+
+        // assert.equal(
+        //     vaultBalance.value.uiAmount, tokenAOfferedAmount.toNumber(),
+        //     "Vault balance does not match expected deposit."
+        // );
+
+        //fetch the offer data
+        // Fetch the offer data
+        const offerAccountSpl = await program.account.offer.fetch(offerPdaSpl);
+        assert.ok(offerAccountSpl.id.eq(offerIdSpl));
+        assert.equal(offerAccountSpl.maker.toBase58(), userA.publicKey.toBase58());
+        assert.equal(offerAccountSpl.isNative, false);
+        console.log(
+            "Offer stored for SPL deposit, id =",
+            offerAccountSpl.id.toString()
+        );
+
     });
 
 
