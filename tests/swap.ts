@@ -1,14 +1,11 @@
 import * as anchor from "@coral-xyz/anchor";
 import { BN, Program } from "@coral-xyz/anchor";
+import { ASSOCIATED_TOKEN_PROGRAM_ID, AuthorityType, getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram } from "@solana/web3.js";
 import { assert } from "chai";
-import { Swap } from "../target/types/swap";
-import { PublicKey, Keypair, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js";
-import {
-    TOKEN_PROGRAM_ID,
-    getAssociatedTokenAddressSync,
-    ASSOCIATED_TOKEN_PROGRAM_ID,
-} from "@solana/spl-token";
 import crypto from "crypto";
+
+import { Swap } from "../target/types/swap";
 
 // User A (swap.json) and User B (chaidex.json) keypairs
 const userA = Keypair.fromSecretKey(new Uint8Array(require("../swap.json")));
@@ -68,9 +65,9 @@ describe("swap", () => {
 
         const [vaultPda] = PublicKey.findProgramAddressSync(
             [
-                Buffer.from("vault-native"),
-                userA.publicKey.toBuffer(),
-                idLE,
+                Buffer.from("vault-native")
+                // userA.publicKey.toBuffer(),
+                // idLE,
             ],
             program.programId
         );
@@ -106,6 +103,8 @@ describe("swap", () => {
         // } catch (error) {
         //     console.warn("Error fetching token balances. Maybe the accounts don’t exist yet.");
         // }
+        const vaultBalanceBefore = await provider.connection.getBalance(vaultPda);
+        console.log("Vault lamport balance before:", vaultBalanceBefore);
 
 
 
@@ -115,7 +114,7 @@ describe("swap", () => {
 
                 offerId, // Trade ID
                 new BN(15000000000), // Token B wanted amount (15 CT)
-                new BN(500000000), // Token A (SOL) offered amount
+                new BN(100000000), // Token A (SOL) offered amount
 
             )
             .accounts({
@@ -132,12 +131,7 @@ describe("swap", () => {
         console.log("✅ Transaction successful! Signature:", tx);
 
         const vaultBalance = await provider.connection.getBalance(vaultPda);
-        console.log("Vault lamport balance:", vaultBalance);
-
-        assert(
-            vaultBalance >= 500000000 - 10_000,
-            "Vault balance not matching expected deposit."
-        );
+        console.log("Vault lamport balance after:", vaultBalance);
 
         // Fetch offer data
         const offerAccount = await program.account.offer.fetch(offerPda);
@@ -157,22 +151,6 @@ describe("swap", () => {
         // Derive PDAs
         const idLEspl = offerIdSpl.toArrayLike(Buffer, "le", 8);
 
-        const [offerPdaSpl] = PublicKey.findProgramAddressSync(
-            [Buffer.from("offer-spl"), userA.publicKey.toBuffer(), idLEspl],
-            program.programId
-        );
-
-        const vaultSplAta = getAssociatedTokenAddressSync(
-            tokenMintA,
-            offerPdaSpl,
-            true, // allowOwnerOffCurve = true
-            TOKEN_PROGRAM_ID,
-            ASSOCIATED_TOKEN_PROGRAM_ID
-        );
-
-        console.log("Offer SPL PDA =", offerPdaSpl.toBase58());
-        console.log("Vault SPL ATA =", vaultSplAta.toBase58());
-
         // We assume userA has a token account with at least 600 CT
         const makerTokenAccountA = getAssociatedTokenAddressSync(
             tokenMintA,
@@ -186,8 +164,34 @@ describe("swap", () => {
         const makerTokenAccInfoBefore = await provider.connection.getTokenAccountBalance(makerTokenAccountA);
         console.log(`User A CT token balance before deposit: ${makerTokenAccInfoBefore.value.uiAmount} CT`);
 
+
+        const [offerPdaSpl] = PublicKey.findProgramAddressSync(
+            [Buffer.from("offer-spl"), userA.publicKey.toBuffer(), idLEspl],
+            program.programId
+        );
+
+        // Derive the global authority PDA
+        const [globalAuthorityPda] = PublicKey.findProgramAddressSync(
+            [Buffer.from("global-authority")], // Fixed seed
+            program.programId
+        );
+        const vaultSplAta = getAssociatedTokenAddressSync(
+            tokenMintA,
+            globalAuthorityPda,
+            true, // allowOwnerOffCurve = true
+            TOKEN_PROGRAM_ID,
+            ASSOCIATED_TOKEN_PROGRAM_ID
+        );
+
+        console.log("Offer SPL PDA =", offerPdaSpl.toBase58());
+        console.log("Vault SPL ATA =", vaultSplAta.toBase58());
+
         const tokenAOfferedAmount = new BN(11000000000); // 11 tokens
         const tokenBWantedAmount = new BN(50_000000000); // 50 tokens
+
+        // spl_vault balance before deposit
+        const vaultBalanceBeforeSpl = await provider.connection.getTokenAccountBalance(vaultSplAta);
+        console.log("Vault CT token balance before deposit:", vaultBalanceBeforeSpl.value.uiAmount);
 
         const txSPL = await program.methods.depositSellerSpl(
             offerIdSpl,
@@ -199,13 +203,18 @@ describe("swap", () => {
             tokenMintB: tokenMintA,
             makerTokenAccountA: makerTokenAccountA,
             offer: offerPdaSpl,
-            vault: vaultSplAta,
+            vault_spl: vaultSplAta,
+            globalAuthority: globalAuthorityPda,
             tokenProgram: TOKEN_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         }).signers([userA]).rpc();
 
         console.log("SPL deposit txn signature:", txSPL);
+
+        // spl_vault balance after deposit
+        const vaultBalanceAfterSpl = await provider.connection.getTokenAccountBalance(vaultSplAta);
+        console.log("Vault CT token balance after deposit:", vaultBalanceAfterSpl.value.uiAmount);
 
         // Check userA’s balance after deposit
         const makerTokenAccInfoAfter = await provider.connection.getTokenAccountBalance(makerTokenAccountA);

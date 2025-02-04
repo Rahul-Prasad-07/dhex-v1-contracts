@@ -5,7 +5,7 @@ use anchor_spl::{
     token::{self, Mint, Token, TokenAccount, Transfer},
 };
 
-declare_id!("7AXBs6wHosutsXd11Q3zdNJ4LS9p9XE3bX3nJfvfGunU");
+declare_id!("8Mi1JhPQHTHHaLFhLUMLZGRbVMc9D4sZtUubSRpxhpNP");
 
 /// Program entrypoint
 #[program]
@@ -140,13 +140,13 @@ pub struct MakeOfferNative<'info> {
 
     /// A simple system-owned vault account to store raw SOL
     #[account(
-        init,
+        init_if_needed,
         payer = maker,
         space = 16, // if you only store the VaultAccount's bump or minimal data
-        seeds = [b"vault-native", maker.key().as_ref(), id.to_le_bytes().as_ref()],
+        seeds = [b"vault-native"],
         bump
     )]
-    pub vault: Account<'info, VaultAccount>,
+    pub vault: Account<'info, GlobalSolVault>,
 
     pub system_program: Program<'info, System>,
 }
@@ -186,26 +186,32 @@ pub struct MakeOfferSpl<'info> {
     )]
     pub offer: Account<'info, Offer>,
 
-    /// The ATA vault that will hold the offered SPL tokens.
-    /// Owned by the Offer PDA (so the Offer can control it).
     #[account(
-        init,
+        init_if_needed,
         payer = maker,
         associated_token::mint = token_mint_a,
-        associated_token::authority = offer // <--- Offer is authority
+        associated_token::authority = global_authority,
+        //associated_token::allow_owner_off_curve = true  // <--- allow PDA as authority
     )]
     pub vault_spl: Account<'info, TokenAccount>,
+
+    /// CHECK: This is a PDA used as the authority for the global vault.
+    /// It does not need additional validation because it's derived using `seeds = [b"global-authority"]`.
+    #[account(
+        seeds = [b"global-authority"], // ✅ Fixed PDA seed
+        bump
+    )]
+    pub global_authority: AccountInfo<'info>,
 
     pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
 }
 
-/// A simple system-owned vault account for raw SOL
+/// Single global SOL vault data.
 #[account]
-pub struct VaultAccount {
-    /// You can store additional info if desired
-    pub bump: u8,
+pub struct GlobalSolVault {
+    pub bump: u8, // Could store more fields if you want
 }
 
 /// Primary Offer account storing all trade data
@@ -228,7 +234,8 @@ impl Offer {
         + 32                    // token_mint_b
         + 8                     // token_b_wanted_amount
         + 1                     // is_native
-        + 1; // bump
+        + 1
+        +8; // bump
 }
 
 #[event]
