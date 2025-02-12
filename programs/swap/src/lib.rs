@@ -6,7 +6,7 @@ use anchor_spl::{
 };
 
 //program_id
-declare_id!("B7TKWwRjzkTKb9kc5VSA9gawufx6SmbkViyx2GmMFtWL");
+declare_id!("AV4HssBtbtRY7oGVbi3kkvLoKNnhHmdpfbJ23LDjYSPH");
 
 #[program]
 pub mod swap {
@@ -245,9 +245,97 @@ pub mod swap {
             is_swap_completed: true,
         });
 
-    
         Ok(())
     }
+
+    // if the **origin** is EVM chains,
+    // this is a clone of the relay_offer function
+    // this fn is called maker deposit assets on EVM chain and we relay the offer to the Solana chain
+    // this fn is executed by listening a event "tradeCreated" on EVM chain
+    pub fn relay_offer_clone(
+        ctx: Context<RelayOfferClone>,
+        id: u64,
+        external_seller_evm: [u8; 20], // EVM address
+        external_seller_sol: Pubkey,   // Solana address
+        token_a_offered_amount: u64,
+        token_b_wanted_amount: u64,
+        is_taker_native: bool,
+        chain_id: u64,
+    ) -> Result<()> {
+        // Populate InterchainOffer data using set_inner
+        ctx.accounts.interchain_offer.set_inner(InterchainOffer {
+            trade_id: id,
+            external_seller_sol,
+            external_seller_evm,
+            is_seller_origin_sol: false,
+            is_taker_native,
+            is_swap_completed: false,
+            is_native: false,
+            chain_id,
+            token_a_offered_amount,
+            token_b_wanted_amount,
+            token_mint_a: ctx.accounts.token_mint_a.key(),
+            fee_collected: 0,
+            bump: ctx.bumps.interchain_offer,
+        });
+
+        // emit an event
+        // this event will be listened by the Solana chain
+        // and the Solana chain will create a new offer account
+        // and the taker will take the offer
+        emit!(RelayEvmTradeEvent {
+            trade_id: id,
+            external_seller_sol,
+            external_seller_evm,
+            is_seller_origin_sol: false,
+            is_taker_native,
+            is_swap_completed: false,
+            is_native: false,
+            chain_id,
+            token_a_offered_amount,
+            token_b_wanted_amount,
+            token_mint_a: ctx.accounts.token_mint_a.key(),
+            fee_collected: 0,
+        });
+
+        msg!(
+            "Relay offer completed for trade id: {}, external_seller_sol: {}, 
+        external_seller_evm : {:?}, is_swap_completed: {}, token_a_offered_amount: {},token_b_wanted_amount: {}, is_taker_native: {}",
+            id,
+            external_seller_sol,
+            external_seller_evm,
+            false,
+            token_a_offered_amount,
+            token_b_wanted_amount,
+            is_taker_native
+        );
+
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+#[instruction(id: u64)]
+pub struct RelayOfferClone<'info> {
+    #[account(mut)]
+    pub maker: Signer<'info>,
+
+    #[account()]
+    pub token_mint_a: Account<'info, Mint>,
+
+    #[account(
+        init,
+        payer = maker,
+        // space: big enough for all fields
+        space = 8 + InterchainOffer::SIZE,
+        seeds = [b"InterChainoffer", maker.key().as_ref(), id.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub interchain_offer: Account<'info, InterchainOffer>,
+
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
 }
 
 #[derive(Accounts)]
@@ -469,6 +557,47 @@ impl Offer {
         + 1; // is_taker_nativ
 }
 
+#[account]
+pub struct InterchainOffer {
+    //relay fields
+    pub trade_id: u64,                 // same as evm trade id
+    pub external_seller_sol: Pubkey, // solana address of seller where he wants to receive the token
+    pub external_seller_evm: [u8; 20], // EVM address of seller
+    pub is_seller_origin_sol: bool,  // NO, seller origin is EVM
+    pub is_taker_native: bool,       // NO, taker wants spl token
+    pub is_swap_completed: bool,     // NO, swap is not completed
+    pub is_native: bool,             // NO, seller is not offering native token
+    pub chain_id: u64,
+
+    // deposit amount fields
+    pub token_a_offered_amount: u64, // seller offering 0.17 eth on evm chain
+    pub token_b_wanted_amount: u64,  // seller wants 15 USDC on solana chain
+
+    // buyer is transfering 15 USDC to seller which is spl-token
+    // we need token mint account address for USDC spl token
+    pub token_mint_a: Pubkey, // USDC mint account address
+    //pub buyer: Option<Pubkey>, // buyer address on solana chain
+    //pub buyer_token_account: Option<Pubkey>, // buyer token account address on solana chain
+    pub fee_collected: u64, // fee collected by the relayer
+
+    pub bump: u8, // bump for the account
+}
+
+impl InterchainOffer {
+    pub const SIZE: usize = 32  // trade_id
+        + 32                    // maker
+        + 20                    // external_seller
+        + 1                     // is_seller_origin_sol
+        + 1                     // is_taker_native
+        + 1                     // is_swap_completed
+        + 1                     // is_native
+        + 8                     // chain_id
+        + 8                     // token_a_offered_amount
+        + 8                     // token_b_wanted_amount
+        + 32                    // token_mint_a
+        + 8; // fee_collected
+}
+
 /// Event emitted when a trade is created.
 #[event]
 pub struct CreateTradeEvent {
@@ -491,6 +620,22 @@ pub struct SwapCompletedEvent {
     pub token_a_transferred: u64,
     pub token_b_transferred: u64,
     pub is_swap_completed: bool,
+}
+
+#[event]
+pub struct RelayEvmTradeEvent {
+    pub trade_id: u64,
+    pub external_seller_sol: Pubkey,
+    pub external_seller_evm: [u8; 20],
+    pub is_seller_origin_sol: bool,
+    pub is_taker_native: bool,
+    pub is_swap_completed: bool,
+    pub is_native: bool,
+    pub chain_id: u64,
+    pub token_a_offered_amount: u64,
+    pub token_b_wanted_amount: u64,
+    pub token_mint_a: Pubkey,
+    pub fee_collected: u64,
 }
 
 #[error_code]

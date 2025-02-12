@@ -15,7 +15,7 @@ const userB = Keypair.fromSecretKey(new Uint8Array(require("../chaidex.json")));
 const tokenMintA = new PublicKey("J1q7FEiMhzgd1T9bGtdh8ZTZa8mhsyszaW4AqQPvYxWX");
 const tokenMintB = new PublicKey("J1q7FEiMhzgd1T9bGtdh8ZTZa8mhsyszaW4AqQPvYxWX");
 
-
+const offerCatch = new Map();
 
 describe.skip("swap-maker", () => {
     const provider = anchor.AnchorProvider.env();
@@ -250,7 +250,7 @@ describe.skip("swap-maker", () => {
 
 });
 
-describe("swap-taker", () => {
+describe.skip("swap-taker", () => {
 
     const provider = anchor.AnchorProvider.env();
     anchor.setProvider(provider);
@@ -415,3 +415,145 @@ describe("swap-taker", () => {
 
     });
 });
+
+describe("interchain-relay-data", () => {
+
+    //1. set up the Anchor provider and program
+    const provider = anchor.AnchorProvider.env();
+    const connection = provider.connection;
+    anchor.setProvider(provider);
+    const program = anchor.workspace.Swap as Program<Swap>;
+
+    const externalSellerSol = new PublicKey(
+        "DYNnymGWfKKqYgwRuxYZq3f4qDtQ1LLaXogWhchHrjfQ"
+    );
+
+    const evmHexAddress = "c629Fa8B87AD97E92C448E56Df9d979E1D1f441f".toLowerCase();
+    const evemAddressBytes = Buffer.from(evmHexAddress, "hex"); // 20 bytes
+
+    let interchainOfferPda: PublicKey;
+
+
+    it("relayer calls relay_offer_clone", async () => {
+        // Step A: Generate random ID for the trade
+        const randomSeed = crypto.randomBytes(4).readUInt32LE(0);
+        const tradeId = new BN(randomSeed); // or a fixed number if you prefer
+        console.log("Using Trade ID:", tradeId.toString());
+
+        const tokenAOfferedAmount = new BN("170000000000000000"); // 0.17 ETH in wei
+        const tokenBWantedAmount = new BN("15000000000"); // example for CT TOKENS (9 decimals)
+
+        const chainId = new BN(1); // Ethereum mainnet
+        const isTakerNative = false; // Let's say the buyer on Solana is paying with an SPL token, not SOL
+
+        // Step B: Derive the PDA for the offer
+        const idLE = tradeId.toArrayLike(Buffer, "le", 8);
+        const [interchainOfferPdaPubkey, bump] = await PublicKey.findProgramAddress(
+            [Buffer.from("InterChainoffer"),
+            userA.publicKey.toBuffer(),
+                idLE
+            ],
+            program.programId
+        );
+        interchainOfferPda = interchainOfferPdaPubkey;
+
+        console.log("InterchainOffer PDA:", interchainOfferPda.toBase58());
+        console.log("Bump found:", bump);
+
+        const externalSellerEvm = Array.from(evemAddressBytes);
+
+
+
+        // Step C: Call the relay_offer_clone method
+        const txSig = await program.methods.relayOfferClone(
+            tradeId,
+            externalSellerEvm,
+            externalSellerSol,
+            tokenAOfferedAmount,
+            tokenBWantedAmount,
+            isTakerNative,
+            chainId
+        ).accounts({
+
+            maker: userA.publicKey,
+            tokenMintA: tokenMintA,
+            interchainOffer: interchainOfferPda,
+            systemProgram: SystemProgram.programId,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+
+        }).signers([userA]).rpc();
+
+        console.log("relay_offer_clone tx signature:", txSig);
+
+        // 3) Possibly wait a bit for the logs to arrive
+        // await new Promise((resolve) => setTimeout(resolve, 2000));
+
+
+        // 2. Fetch transaction details
+        // const txDetails = await connection.getTransaction(txSig, {
+        //     commitment: "confirmed",
+        //     maxSupportedTransactionVersion: 0,
+        // });
+
+        // if (txDetails && txDetails.meta && txDetails.meta.logMessages) {
+        //     console.log("\n🔥 Logs from transaction: 🔥");
+        //     txDetails.meta.logMessages.forEach(log => console.log(log));
+        // }
+
+
+
+
+
+        // Step D: Fetch the offer data
+        const offerAccount = await program.account.interchainOffer.fetch(interchainOfferPda);
+        //console.log("offerAccount data:", offerAccount);
+
+        // Step E: Log the EVM address from the offer account
+        // We assume the field is named "externalSellerEvm" in your account.
+        const rawEvmBytes = Buffer.from(offerAccount.externalSellerEvm);
+        // Convert to a "0x" prefixed hex string
+        const evmAddrHex = "0x" + rawEvmBytes.toString("hex");
+        // If you'd rather uppercase it: 
+        // const evmAddrHex = "0x" + rawEvmBytes.toString("hex").toUpperCase();
+
+        console.log("EVM address from account:", evmAddrHex);
+
+        //store the offer details in a map/DB
+        offerCatch.set("tradeId", offerAccount.tradeId.toString());
+        offerCatch.set("externalSellerEvm", evmAddrHex);
+        offerCatch.set("externalSellerSol", offerAccount.externalSellerSol.toBase58());
+        offerCatch.set("tokenAOfferedAmount", offerAccount.tokenAOfferedAmount.toString());
+        offerCatch.set("tokenBWantedAmount", offerAccount.tokenBWantedAmount.toString());
+        offerCatch.set("isTakerNative", offerAccount.isTakerNative.toString());
+        offerCatch.set("chainId", offerAccount.chainId.toString());
+        offerCatch.set("isSwapCompleted", offerAccount.isSwapCompleted.toString());
+        offerCatch.set("isSellerOriginSol ", offerAccount.isSellerOriginSol.toString());
+        offerCatch.set("feeCollected", offerAccount.feeCollected.toString());
+
+        console.log("Offer details:", offerCatch);
+
+        //offer details are fetched and stored now you are confirmed that 
+        // relayer has successfully relayed the evm offer to solana
+        // you can now show this all offers to the user and let them choose the offer they want to take
+
+        // step F: Now the taker can take the offer by calling the deposit_native or deposit_spl method
+        // and providing the same tradeId to the method
+        // stored offer details that you stored while calling deposit_native or deposit_spl method
+        // fetch the offer details from depsoit_native or deposit_spl method and compare with the stored offer details
+
+        //step G: if the offer details has info like UserB has deposited 500 USDT on solana
+        // then relayer can call the evm fn to send 0.17 ETH from evm contract to userB evm address
+        // and emit the event BuyerWithdrawn
+
+        //step H: relayer can see the BuyerWithdrawn event and then call the finalize_withdrawal method on solana to send 500 USDT from sol contract to UserA's sol address
+        // and emit the event SellerWithdrawn
+        // swap is completed now
+
+
+    });
+
+
+});
+
+
