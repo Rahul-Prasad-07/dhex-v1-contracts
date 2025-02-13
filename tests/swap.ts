@@ -83,7 +83,7 @@ describe.skip("swap-maker", () => {
         // accounts.taker = userB.publicKey;
         // accounts.tokenMintA = tokenMintA;
         // accounts.tokenMintB = tokenMintA;
-        // accounts.makerTokenAccountA = userATokenAccount;
+        // accounts.buyerSolTokenAccountA = userATokenAccount;
         // accounts.takerTokenAccountB = userBTokenAccount;
         // accounts.offer = offerPda;
         // accounts.vault = vaultTokenAccount;
@@ -249,6 +249,234 @@ describe.skip("swap-maker", () => {
     });
 
 });
+
+describe("interchain-swap-maker", () => {
+    const provider = anchor.AnchorProvider.env();
+    anchor.setProvider(provider);
+    const program = anchor.workspace.Swap as Program<Swap>;
+
+    console.log("Program ID:", program.programId.toString());
+
+    // let offerPda: PublicKey;
+    let vaultTokenAccount: PublicKey;
+    let userATokenAccount: PublicKey;
+    let userBTokenAccount: PublicKey;
+
+    it.skip("Deposit interchain raw SOL (native)", async () => {
+        console.log(`User A: ${userA.publicKey.toBase58()}`);
+        console.log(`User B: ${userB.publicKey.toBase58()}`);
+
+
+        const randomSeed = crypto.randomBytes(4).readUInt32LE(0);
+        const offerId = new BN(2946257162);
+
+        console.log(`Using Offer ID: ${offerId.toString()}`); // ✅ Log Offer ID
+
+        // Fix the endianness issue
+        const idLE = new BN(offerId).toArrayLike(Buffer, "le", 8);
+        //offerPda 
+        let offerPda = new PublicKey("38gnfp3sK1pqu4kRcHdZrEb97aneupqcNpHzarwqC7kS")
+
+        const offerAccount = await program.account.interchainOffer.fetch("38gnfp3sK1pqu4kRcHdZrEb97aneupqcNpHzarwqC7kS");
+        console.log("Offer data:", offerAccount);
+
+        if (offerId.eq(offerAccount.tradeId)) {
+            console.log("Offer ID matches");
+        } else {
+            console.log("Offer ID does not match");
+            return;
+        }
+
+        const [vaultPda] = PublicKey.findProgramAddressSync(
+            [
+                Buffer.from("vault-native")
+                // userA.publicKey.toBuffer(),
+                // idLE,
+            ],
+            program.programId
+        );
+
+        console.log("offerPda =", offerPda);
+        console.log("vaultPda =", vaultPda.toBase58());
+
+        const vaultBalanceBefore = await provider.connection.getBalance(vaultPda);
+        console.log("Vault lamport balance before:", vaultBalanceBefore);
+
+
+
+        // 🚀 **Step 2: Call deposit_seller_native**
+        const tx = await program.methods
+            .interchainDepositSellerNative(
+
+                offerAccount.tradeId,
+                offerAccount.externalSellerSol,
+                offerAccount.externalSellerEvm,
+                offerAccount.tokenAOfferedAmount,
+                offerAccount.tokenBWantedAmount,
+                offerAccount.isTakerNative,
+
+            )
+            .accounts({
+                buyerSol: userA.publicKey,
+                tokenMintA: tokenMintA,
+                tokenMintB: tokenMintA,
+                offer: offerPda,
+                vault: vaultPda,
+                systemProgram: SystemProgram.programId,
+            })
+            .signers([userA])
+            .rpc();
+
+        console.log("✅ Transaction successful! Signature:", tx);
+
+        const vaultBalance = await provider.connection.getBalance(vaultPda);
+        console.log("Vault lamport balance after:", vaultBalance);
+
+        // Fetch offer data
+        // const offerAccount = await program.account.interchainOffer.fetch(offerPda);
+        //console.log("Offer data:", offerAccount);
+        //     assert.ok(offerAccount.id.eq(offerId), " Offer ID does not match expected value.");
+        //     assert.equal(offerAccount.maker.toBase58(), userA.publicKey.toBase58(), " Maker does not match expected value.");
+        //     assert.equal(offerAccount.isNative, true, " isNative does not match expected value.");
+        //     assert.equal(offerAccount.isTakerNative, false, " isTakerNative does not match expected value.");
+        //     assert.equal(offerAccount.isSwapCompleted, false, " isSwapCompleted does not match expected value.");
+        //     console.log("Offer stored for native deposit, id =", offerAccount.id.toString());
+    });
+
+    it.skip("log offer details before tx", async () => {
+        const offerAccount = await program.account.interchainOffer.fetch("J7XPWeUMVM12fXbhAsxSDF5xajzoVVsC2S5fW5cdJtES");
+        console.log("Offer data after interchain deposit ------>", offerAccount);
+    });
+
+    it("Deposit Interchain SPL Tokens (non-native)", async () => {
+        console.log("\n--- Now testing deposit_seller_spl ---");
+
+        const randomSeedSpl = crypto.randomBytes(4).readUInt32LE(0);
+        const offerIdSpl = new BN(1709950475);
+        console.log("Using SPL Offer ID:", offerIdSpl.toString());
+
+        // Derive PDAs
+        const idLEspl = offerIdSpl.toArrayLike(Buffer, "le", 8);
+
+        let offerPdaSpl = new PublicKey("J7XPWeUMVM12fXbhAsxSDF5xajzoVVsC2S5fW5cdJtES")
+
+        const offerAccount = await program.account.interchainOffer.fetch("J7XPWeUMVM12fXbhAsxSDF5xajzoVVsC2S5fW5cdJtES");
+        console.log("offer data details before deposit--------->", offerAccount);
+
+        if (offerIdSpl.eq(offerAccount.tradeId)) {
+            console.log("Offer ID matches");
+        } else {
+            console.log("Offer ID does not match");
+            return;
+        }
+
+        if (userA.publicKey === offerAccount.buyerSol) {
+            console.log("Buyer matches");
+        } else {
+            console.log("Buyer does not match");
+            console.log("Buyer:", userA.publicKey.toBase58());
+            console.log("Offer Buyer:", offerAccount.buyerSol.toBase58());
+        }
+
+        // We assume userA has a token account with at least 600 CT
+        const buyerSolTokenAccountA = getAssociatedTokenAddressSync(
+            tokenMintA,
+            userA.publicKey,
+            false,
+            TOKEN_PROGRAM_ID,
+            ASSOCIATED_TOKEN_PROGRAM_ID
+        );
+
+        // Check userA’s balance before deposit
+        // const makerTokenAccInfoBefore = await provider.connection.getTokenAccountBalance(buyerSolTokenAccountA);
+        // console.log(`User A CT token balance before deposit: ${makerTokenAccInfoBefore.value.uiAmount} CT`);
+
+
+        // const [offerPdaSpl] = PublicKey.findProgramAddressSync(
+        //     [Buffer.from("offer"), userA.publicKey.toBuffer(), idLEspl],
+        //     program.programId
+        // );
+
+        // Derive the global authority PDA
+        const [globalAuthorityPda] = PublicKey.findProgramAddressSync(
+            [Buffer.from("global-authority")], // Fixed seed
+            program.programId
+        );
+        const vaultSplAta = getAssociatedTokenAddressSync(
+            tokenMintA,
+            globalAuthorityPda,
+            true, // allowOwnerOffCurve = true
+            TOKEN_PROGRAM_ID,
+            ASSOCIATED_TOKEN_PROGRAM_ID
+        );
+
+        //console.log("Offer SPL PDA =", offerPdaSpl);
+        console.log("Vault SPL ATA =", vaultSplAta.toBase58());
+
+        // const tokenAOfferedAmount = new BN(11000000000); // 11 tokens
+        // const tokenBWantedAmount = new BN(100000000) // 0.1 sol
+
+        // spl_vault balance before deposit
+        //const vaultBalanceBeforeSpl = await provider.connection.getTokenAccountBalance(vaultSplAta);
+        //console.log("Vault CT token balance before deposit:", vaultBalanceBeforeSpl.value.uiAmount);
+
+        const txSPL = await program.methods.interchainDepositSellerSpl(
+            offerAccount.tradeId,
+            offerAccount.externalSellerSol,
+            offerAccount.externalSellerEvm,
+            offerAccount.tokenAOfferedAmount,
+            offerAccount.tokenBWantedAmount,
+            offerAccount.isTakerNative,
+        ).accounts({
+            buyerSol: userA.publicKey,
+            tokenMintA: tokenMintA,
+            tokenMintB: tokenMintA,
+            buyerSolTokenAccountA: buyerSolTokenAccountA,
+            offer: offerPdaSpl,
+            vault_spl: vaultSplAta,
+            globalAuthority: globalAuthorityPda,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        }).signers([userA]).rpc();
+
+        console.log("SPL deposit txn signature:", txSPL);
+
+        // spl_vault balance after deposit
+        const vaultBalanceAfterSpl = await provider.connection.getTokenAccountBalance(vaultSplAta);
+        console.log("Vault CT token balance after deposit:", vaultBalanceAfterSpl.value.uiAmount);
+
+        // Check userA’s balance after deposit
+        const makerTokenAccInfoAfter = await provider.connection.getTokenAccountBalance(buyerSolTokenAccountA);
+        console.log(`User A CT token balance after deposit: ${makerTokenAccInfoAfter.value.uiAmount} CT`);
+
+        // Check vault balance
+        const vaultBalance = await provider.connection.getTokenAccountBalance(vaultSplAta);
+        console.log(`Vault CT token balance: ${vaultBalance.value.uiAmount} CT`);
+
+        // assert.equal(
+        //     vaultBalance.value.uiAmount, tokenAOfferedAmount.toNumber(),
+        //     "Vault balance does not match expected deposit."
+        // );
+
+        //fetch the offer data
+        // Fetch the offer data
+        const offerAccountSpl = await program.account.interchainOffer.fetch("J7XPWeUMVM12fXbhAsxSDF5xajzoVVsC2S5fW5cdJtES");
+        console.log("Offer data after interchain deposit ------>", offerAccountSpl);
+        assert.ok(offerAccountSpl.tradeId.eq(offerIdSpl));
+        assert.equal(offerAccountSpl.buyerSol.toBase58(), userA.publicKey.toBase58());
+        assert.equal(offerAccountSpl.isNative, false);
+        assert.equal(offerAccountSpl.isTakerNative, false);
+        assert.equal(offerAccountSpl.isSwapCompleted, false);
+        console.log(
+            "Offer stored for SPL deposit, id =",
+            offerAccountSpl.tradeId.toString()
+        );
+
+    });
+
+});
+
 
 describe.skip("swap-taker", () => {
 
@@ -416,7 +644,7 @@ describe.skip("swap-taker", () => {
     });
 });
 
-describe("interchain-relay-data", () => {
+describe.skip("interchain-native-relay-data", () => {
 
     //1. set up the Anchor provider and program
     const provider = anchor.AnchorProvider.env();
@@ -441,16 +669,16 @@ describe("interchain-relay-data", () => {
         console.log("Using Trade ID:", tradeId.toString());
 
         const tokenAOfferedAmount = new BN("170000000000000000"); // 0.17 ETH in wei
-        const tokenBWantedAmount = new BN("15000000000"); // example for CT TOKENS (9 decimals)
+        const tokenBWantedAmount = new BN("50000000"); // 0.05 SOL (9 decimals)
 
         const chainId = new BN(1); // Ethereum mainnet
         const isTakerNative = false; // Let's say the buyer on Solana is paying with an SPL token, not SOL
 
         // Step B: Derive the PDA for the offer
         const idLE = tradeId.toArrayLike(Buffer, "le", 8);
-        const [interchainOfferPdaPubkey, bump] = await PublicKey.findProgramAddress(
+        const [interchainOfferPdaPubkey, bump] = await PublicKey.findProgramAddressSync(
             [Buffer.from("InterChainoffer"),
-            userA.publicKey.toBuffer(),
+            userB.publicKey.toBuffer(),
                 idLE
             ],
             program.programId
@@ -475,34 +703,138 @@ describe("interchain-relay-data", () => {
             chainId
         ).accounts({
 
-            maker: userA.publicKey,
+            maker: userB.publicKey,
             tokenMintA: tokenMintA,
             interchainOffer: interchainOfferPda,
             systemProgram: SystemProgram.programId,
             tokenProgram: TOKEN_PROGRAM_ID,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
 
-        }).signers([userA]).rpc();
+        }).signers([userB]).rpc();
 
         console.log("relay_offer_clone tx signature:", txSig);
 
-        // 3) Possibly wait a bit for the logs to arrive
-        // await new Promise((resolve) => setTimeout(resolve, 2000));
+
+        // Step D: Fetch the offer data
+        const offerAccount = await program.account.interchainOffer.fetch(interchainOfferPda);
+        //console.log("offerAccount data:", offerAccount);
+
+        // Step E: Log the EVM address from the offer account
+        // We assume the field is named "externalSellerEvm" in your account.
+        const rawEvmBytes = Buffer.from(offerAccount.externalSellerEvm);
+        // Convert to a "0x" prefixed hex string
+        const evmAddrHex = "0x" + rawEvmBytes.toString("hex");
+        // If you'd rather uppercase it: 
+        // const evmAddrHex = "0x" + rawEvmBytes.toString("hex").toUpperCase();
+
+        console.log("EVM address from account:", evmAddrHex);
+
+        //store the offer details in a map/DB
+        offerCatch.set("tradeId", offerAccount.tradeId.toString());
+        offerCatch.set("externalSellerEvm", evmAddrHex);
+        offerCatch.set("externalSellerSol", offerAccount.externalSellerSol.toBase58());
+        offerCatch.set("tokenAOfferedAmount", offerAccount.tokenAOfferedAmount.toString());
+        offerCatch.set("tokenBWantedAmount", offerAccount.tokenBWantedAmount.toString());
+        offerCatch.set("isTakerNative", offerAccount.isTakerNative.toString());
+        offerCatch.set("chainId", offerAccount.chainId.toString());
+        offerCatch.set("isSwapCompleted", offerAccount.isSwapCompleted.toString());
+        offerCatch.set("isSellerOriginSol ", offerAccount.isSellerOriginSol.toString());
+        offerCatch.set("feeCollected", offerAccount.feeCollected.toString());
+
+        console.log("Offer details:", offerCatch);
+
+        //offer details are fetched and stored now you are confirmed that 
+        // relayer has successfully relayed the evm offer to solana
+        // you can now show this all offers to the user and let them choose the offer they want to take
+
+        // step F: Now the taker can take the offer by calling the deposit_native or deposit_spl method
+        // and providing the same tradeId to the method
+        // stored offer details that you stored while calling deposit_native or deposit_spl method
+        // fetch the offer details from depsoit_native or deposit_spl method and compare with the stored offer details
+
+        //step G: if the offer details has info like UserB has deposited 500 USDT on solana
+        // then relayer can call the evm fn to send 0.17 ETH from evm contract to userB evm address
+        // and emit the event BuyerWithdrawn
+
+        //step H: relayer can see the BuyerWithdrawn event and then call the finalize_withdrawal method on solana to send 500 USDT from sol contract to UserA's sol address
+        // and emit the event SellerWithdrawn
+        // swap is completed now
 
 
-        // 2. Fetch transaction details
-        // const txDetails = await connection.getTransaction(txSig, {
-        //     commitment: "confirmed",
-        //     maxSupportedTransactionVersion: 0,
-        // });
-
-        // if (txDetails && txDetails.meta && txDetails.meta.logMessages) {
-        //     console.log("\n🔥 Logs from transaction: 🔥");
-        //     txDetails.meta.logMessages.forEach(log => console.log(log));
-        // }
+    });
 
 
+});
 
+describe.skip("interchain-spl-relay-data", () => {
+
+    //1. set up the Anchor provider and program
+    const provider = anchor.AnchorProvider.env();
+    const connection = provider.connection;
+    anchor.setProvider(provider);
+    const program = anchor.workspace.Swap as Program<Swap>;
+
+    const externalSellerSol = new PublicKey(
+        "DYNnymGWfKKqYgwRuxYZq3f4qDtQ1LLaXogWhchHrjfQ"
+    );
+
+    const evmHexAddress = "c629Fa8B87AD97E92C448E56Df9d979E1D1f441f".toLowerCase();
+    const evemAddressBytes = Buffer.from(evmHexAddress, "hex"); // 20 bytes
+
+    let interchainOfferPda: PublicKey;
+
+
+    it("relayer calls relay_offer_clone", async () => {
+        // Step A: Generate random ID for the trade
+        const randomSeed = crypto.randomBytes(4).readUInt32LE(0);
+        const tradeId = new BN(randomSeed); // or a fixed number if you prefer
+        console.log("Using Trade ID:", tradeId.toString());
+
+        const tokenAOfferedAmount = new BN("170000000000000000"); // 0.17 ETH in wei
+        const tokenBWantedAmount = new BN("15000000000"); // 15 CT tokens (9 decimals)
+
+        const chainId = new BN(1); // Ethereum mainnet
+        const isTakerNative = false; // Let's say the buyer on Solana is paying with an SPL token, not SOL
+
+        // Step B: Derive the PDA for the offer
+        const idLE = tradeId.toArrayLike(Buffer, "le", 8);
+        const [interchainOfferPdaPubkey, bump] = await PublicKey.findProgramAddressSync(
+            [Buffer.from("InterChainoffer"),
+            userB.publicKey.toBuffer(),
+                idLE
+            ],
+            program.programId
+        );
+        interchainOfferPda = interchainOfferPdaPubkey;
+
+        console.log("InterchainOffer PDA:", interchainOfferPda.toBase58());
+        console.log("Bump found:", bump);
+
+        const externalSellerEvm = Array.from(evemAddressBytes);
+
+
+
+        // Step C: Call the relay_offer_clone method
+        const txSig = await program.methods.relayOfferClone(
+            tradeId,
+            externalSellerEvm,
+            externalSellerSol,
+            tokenAOfferedAmount,
+            tokenBWantedAmount,
+            isTakerNative,
+            chainId
+        ).accounts({
+
+            maker: userB.publicKey,
+            tokenMintA: tokenMintA,
+            interchainOffer: interchainOfferPda,
+            systemProgram: SystemProgram.programId,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+
+        }).signers([userB]).rpc();
+
+        console.log("relay_offer_clone tx signature:", txSig);
 
 
         // Step D: Fetch the offer data
