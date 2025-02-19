@@ -5,7 +5,7 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-swap = "2UQCGKeeDf5YpLHCz6oLMP2j4cN2P2snRoZosGe28Aot"
+swap = "EPwQBZMG7y7VbijnPfPk7qgqR78TvZucSFP14zygkrAS"
 
 [registry]
 url = "https://api.apr.dev"
@@ -13,6 +13,7 @@ url = "https://api.apr.dev"
 [provider]
 cluster = "Devnet"
 wallet = "./swap.json"
+
 
 [scripts]
 test = "npx ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"

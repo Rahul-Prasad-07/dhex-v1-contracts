@@ -6,7 +6,7 @@ use anchor_spl::{
 };
 
 //program_id
-declare_id!("2UQCGKeeDf5YpLHCz6oLMP2j4cN2P2snRoZosGe28Aot");
+declare_id!("EPwQBZMG7y7VbijnPfPk7qgqR78TvZucSFP14zygkrAS");
 
 #[program]
 pub mod swap {
@@ -40,7 +40,7 @@ pub mod swap {
             &[], // No signer seeds needed for maker’s signature
         )?;
         msg!(
-            "Native SOL transfer completed. Moved {} lamports into vault.",
+            "Intrachain Native SOL transfer completed. Moved {} lamports into vault.",
             sol_offered_amount
         );
 
@@ -62,6 +62,61 @@ pub mod swap {
             id,
             maker: ctx.accounts.maker.key(),
             token_a_offered_amount: sol_offered_amount,
+            token_b_wanted_amount,
+            is_taker_native,
+            is_swap_completed: false,
+        });
+
+        Ok(())
+    }
+
+    /// Intra-Chain
+    /// For depositing **SPL tokens** into an ATA vault.
+    pub fn deposit_seller_spl(
+        ctx: Context<MakeOfferSpl>,
+        id: u64,
+        token_b_wanted_amount: u64,
+        token_a_offered_amount: u64,
+        is_taker_native: bool,
+    ) -> Result<()> {
+        require!(token_a_offered_amount > 0, P2PError::InvalidAmount);
+
+        // Transfer SPL tokens from the maker's token account to the vault (ATA owned by Offer).
+        // We can use the anchor_spl::token::transfer CPI:
+        token::transfer(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.maker_token_account_a.to_account_info(),
+                    to: ctx.accounts.vault_spl.to_account_info(),
+                    authority: ctx.accounts.maker.to_account_info(),
+                },
+            ),
+            token_a_offered_amount,
+        )?;
+        msg!(
+            "Intrachain SPL token transfer completed: {} tokens moved into vault.",
+            token_a_offered_amount
+        );
+
+        // Populate Offer data
+        ctx.accounts.offer.set_inner(Offer {
+            id,
+            maker: ctx.accounts.maker.key(),
+            token_mint_a: ctx.accounts.token_mint_a.key(),
+            token_mint_b: ctx.accounts.token_mint_b.key(),
+            token_a_offered_amount,
+            token_b_wanted_amount,
+            is_native: false,
+            is_taker_native,
+            is_swap_completed: false,
+            bump: ctx.bumps.offer,
+        });
+
+        emit!(CreateTradeEvent {
+            id,
+            maker: ctx.accounts.maker.key(),
+            token_a_offered_amount,
             token_b_wanted_amount,
             is_taker_native,
             is_swap_completed: false,
@@ -102,7 +157,7 @@ pub mod swap {
             &[], // No signer seeds needed for maker’s signature
         )?;
         msg!(
-            "Native SOL transfer completed. Moved {} lamports into vault.",
+            "Interchain Native SOL transfer completed. Moved {} lamports into vault.",
             sol_offered_amount
         );
 
@@ -136,7 +191,7 @@ pub mod swap {
     }
 
     /// Interchain => Origin is EVM chain
-    pub fn interchain_deposit_seller_native(
+    pub fn interchain_origin_evm_deposit_seller_native(
         ctx: Context<InterchainMakeOfferNative>,
         id: u64,
         external_seller_sol: Pubkey,
@@ -165,7 +220,7 @@ pub mod swap {
             &[], // No signer seeds needed for maker’s signature
         )?;
         msg!(
-            "Native SOL transfer completed. Moved {} lamports into vault.",
+            "Interchain Native SOL transfer completed. Moved {} lamports into vault.",
             sol_offered_amount
         );
 
@@ -180,61 +235,6 @@ pub mod swap {
             id,
             buyer: ctx.accounts.buyer_sol.key(),
             token_a_offered_amount: sol_offered_amount,
-            token_b_wanted_amount,
-            is_taker_native,
-            is_swap_completed: false,
-        });
-
-        Ok(())
-    }
-
-    /// Intra-Chain
-    /// For depositing **SPL tokens** into an ATA vault.
-    pub fn deposit_seller_spl(
-        ctx: Context<MakeOfferSpl>,
-        id: u64,
-        token_b_wanted_amount: u64,
-        token_a_offered_amount: u64,
-        is_taker_native: bool,
-    ) -> Result<()> {
-        require!(token_a_offered_amount > 0, P2PError::InvalidAmount);
-
-        // Transfer SPL tokens from the maker's token account to the vault (ATA owned by Offer).
-        // We can use the anchor_spl::token::transfer CPI:
-        token::transfer(
-            CpiContext::new(
-                ctx.accounts.token_program.to_account_info(),
-                Transfer {
-                    from: ctx.accounts.maker_token_account_a.to_account_info(),
-                    to: ctx.accounts.vault_spl.to_account_info(),
-                    authority: ctx.accounts.maker.to_account_info(),
-                },
-            ),
-            token_a_offered_amount,
-        )?;
-        msg!(
-            "SPL token transfer completed: {} tokens moved into vault.",
-            token_a_offered_amount
-        );
-
-        // Populate Offer data
-        ctx.accounts.offer.set_inner(Offer {
-            id,
-            maker: ctx.accounts.maker.key(),
-            token_mint_a: ctx.accounts.token_mint_a.key(),
-            token_mint_b: ctx.accounts.token_mint_b.key(),
-            token_a_offered_amount,
-            token_b_wanted_amount,
-            is_native: false,
-            is_taker_native,
-            is_swap_completed: false,
-            bump: ctx.bumps.offer,
-        });
-
-        emit!(CreateTradeEvent {
-            id,
-            maker: ctx.accounts.maker.key(),
-            token_a_offered_amount,
             token_b_wanted_amount,
             is_taker_native,
             is_swap_completed: false,
@@ -268,7 +268,7 @@ pub mod swap {
             token_a_offered_amount,
         )?;
         msg!(
-            "SPL token transfer completed: {} tokens moved into vault.",
+            "Interchain SPL token transfer completed: {} tokens moved into vault.",
             token_a_offered_amount
         );
 
@@ -301,7 +301,7 @@ pub mod swap {
     }
 
     /// Interchain => Origin is EVM chain
-    pub fn interchain_deposit_seller_spl(
+    pub fn interchain_origin_evm_deposit_seller_spl(
         ctx: Context<InterchainMakeOfferSpl>,
         id: u64,
         external_seller_sol: Pubkey,
@@ -326,7 +326,7 @@ pub mod swap {
             token_a_offered_amount,
         )?;
         msg!(
-            "SPL token transfer completed: {} tokens moved into vault.",
+            "Interchain SPL token transfer completed: {} tokens moved into vault.",
             token_a_offered_amount
         );
 
@@ -349,7 +349,7 @@ pub mod swap {
         Ok(())
     }
 
-    pub fn take_offer(ctx: Context<TakeOffer>, id: u64) -> Result<()> {
+    pub fn finalize_intrachain_offer(ctx: Context<TakeOffer>, id: u64) -> Result<()> {
         let offer = &mut ctx.accounts.offer;
 
         // Ensure the offer has not already been filled.
@@ -383,7 +383,7 @@ pub mod swap {
             )?;
 
             msg!(
-                "Native SOL transferred {} lamports from native vault to taker.",
+                "Intrachain Native SOL transferred {} lamports from native vault to taker.",
                 offer.token_a_offered_amount
             );
         } else {
@@ -407,7 +407,7 @@ pub mod swap {
             )?;
 
             msg!(
-                "SPL tokens transferred from vault to taker: {} tokens",
+                "Intrachain SPL tokens transferred from vault to taker: {} tokens",
                 offer.token_a_offered_amount
             );
         }
@@ -465,6 +465,226 @@ pub mod swap {
             id: offer.id,
             maker: offer.maker,
             taker: ctx.accounts.taker.key(),
+            token_a_transferred: offer.token_a_offered_amount,
+            token_b_transferred: offer.token_b_wanted_amount,
+            is_swap_completed: true,
+        });
+
+        Ok(())
+    }
+
+    pub fn finalize_interchain_origin_evm_offer(
+        ctx: Context<TakeInterchainOffer>,
+        id: u64,
+    ) -> Result<()> {
+        let offer = &mut ctx.accounts.offer;
+
+        // Ensure the offer has not already been filled.
+        require!(!offer.is_swap_completed, P2PError::SwapAlreadyCompleted);
+        // Prevent a maker from filling their own offer.
+        require!(
+            offer.buyer_sol != ctx.accounts.external_seller_sol.key(),
+            P2PError::MakerAndTakerCannotBeSame
+        );
+
+        msg!(
+            "Finalizing inter-chain swap: {} USDT from vault to seller {}",
+            offer.token_b_wanted_amount,
+            ctx.accounts.external_seller_sol.key()
+        );
+
+        // -------------------------------
+        // Step 1: Transfer Buyer's asset from vault to seller. for origin is EVM chain
+        // step 1: transfer seller's asset from vault to buyer for origin is SOL chain
+
+        if offer.is_native {
+            let vault_bump = ctx.bumps.vault_native;
+            let seeds: &[&[u8]] = &[b"vault-native", &[vault_bump]];
+            let signer_seeds = &[&seeds[..]];
+
+            // -------------------------------
+            let transfer_ix = anchor_lang::solana_program::system_instruction::transfer(
+                &ctx.accounts.vault_native.key(),
+                &ctx.accounts.external_seller_sol.key(),
+                offer.token_b_wanted_amount,
+            );
+
+            anchor_lang::solana_program::program::invoke_signed(
+                &transfer_ix,
+                &[
+                    ctx.accounts.vault_native.to_account_info(),
+                    ctx.accounts.external_seller_sol.to_account_info(),
+                    ctx.accounts.system_program.to_account_info(),
+                ],
+                signer_seeds,
+            )?;
+
+            msg!(
+                "Interchain Native SOL transferred {} lamports from native vault to seller.",
+                offer.token_b_wanted_amount
+            );
+        } else {
+            // Use the global authority PDA to sign for the vault.
+            let global_authority_seeds =
+                &[b"global-authority".as_ref(), &[ctx.bumps.global_authority]];
+
+            let signer_seeds = [&global_authority_seeds[..]];
+
+            token::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    Transfer {
+                        from: ctx.accounts.vault_spl.to_account_info(),
+                        to: ctx
+                            .accounts
+                            .external_seller_sol_token_account_a
+                            .to_account_info(),
+                        authority: ctx.accounts.global_authority.to_account_info(),
+                    },
+                    &signer_seeds,
+                ),
+                offer.token_b_wanted_amount,
+            )?;
+
+            msg!(
+                "Interchain SPL tokens transferred from vault to taker: {} tokens",
+                offer.token_a_offered_amount
+            );
+        }
+
+        // if you don't want on-chain state tracking, you can remove this line and just emit the event and close the offer account.
+        offer.is_swap_completed = true;
+
+        // emit logs
+        msg!(
+            "Interchain offer completed for trade id: {},buyer : {} , external_seller_sol: {},
+        external_seller_evm : {:?}, is_swap_completed: {}, token_a_offered_amount: {},token_b_wanted_amount: {}, is_taker_native: {}",
+            offer.trade_id,
+            offer.buyer_sol,
+            offer.external_seller_sol,
+            offer.external_seller_evm,
+            offer.is_swap_completed,
+            offer.token_a_offered_amount,
+            offer.token_b_wanted_amount,
+            offer.is_taker_native
+        );
+
+        emit!(InterchainSwapCompletedEvent {
+            id: offer.trade_id,
+            buyer: ctx.accounts.buyer_sol.key(),
+            seller: ctx.accounts.external_seller_sol.key(),
+            token_a_transferred: offer.token_a_offered_amount,
+            token_b_transferred: offer.token_b_wanted_amount,
+            is_swap_completed: true,
+        });
+
+        Ok(())
+    }
+
+    pub fn finalize_interchain_origin_sol_offer(
+        ctx: Context<TakeInterchainOriginSolOffer>,
+        id: u64,
+    ) -> Result<()> {
+        let offer = &mut ctx.accounts.interchain_origin_sol_offer;
+
+        // Ensure the offer has not already been filled.
+        require!(!offer.is_swap_completed, P2PError::SwapAlreadyCompleted);
+        // Prevent a maker from filling their own offer.
+        require!(
+            offer.external_buyer_sol != ctx.accounts.seller_sol.key(),
+            P2PError::MakerAndTakerCannotBeSame
+        );
+
+        msg!(
+            "Finalizing inter-chain swap: {} USDT from vault to buyer {}",
+            offer.token_a_offered_amount,
+            ctx.accounts.external_buyer_sol.key()
+        );
+
+        // -------------------------------
+        // Step 1: Transfer Buyer's asset from vault to seller. for origin is EVM chain
+        // step 1: transfer seller's asset from vault to buyer for origin is SOL chain => external_seller_sol = buyer_sol and external_seller_sol_token_account_a = buyer_sol_token_account_a
+
+        if offer.is_native {
+            let vault_bump = ctx.bumps.vault_native;
+            let seeds: &[&[u8]] = &[b"vault-native", &[vault_bump]];
+            let signer_seeds = &[&seeds[..]];
+
+            // -------------------------------
+            let transfer_ix = anchor_lang::solana_program::system_instruction::transfer(
+                &ctx.accounts.vault_native.key(),
+                &ctx.accounts.external_buyer_sol.key(), //external_seller_sol = buyer_sol
+                offer.token_a_offered_amount,
+            );
+
+            anchor_lang::solana_program::program::invoke_signed(
+                &transfer_ix,
+                &[
+                    ctx.accounts.vault_native.to_account_info(),
+                    ctx.accounts.external_buyer_sol.to_account_info(), //external_seller_sol = buyer_sol
+                    ctx.accounts.system_program.to_account_info(),
+                ],
+                signer_seeds,
+            )?;
+
+            msg!(
+                "Interchain Native SOL transferred {} lamports from native vault to buyer : {}.",
+                offer.token_a_offered_amount,
+                offer.external_buyer_sol
+            );
+        } else {
+            // Use the global authority PDA to sign for the vault.
+            let global_authority_seeds =
+                &[b"global-authority".as_ref(), &[ctx.bumps.global_authority]];
+
+            let signer_seeds = [&global_authority_seeds[..]];
+
+            token::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    Transfer {
+                        from: ctx.accounts.vault_spl.to_account_info(),
+                        to: ctx
+                            .accounts
+                            .external_buyer_sol_token_account_a //external_seller_sol_token_account_a = buyer_sol_token_account_a
+                            .to_account_info(),
+                        authority: ctx.accounts.global_authority.to_account_info(),
+                    },
+                    &signer_seeds,
+                ),
+                offer.token_a_offered_amount,
+            )?;
+
+            msg!(
+                "Interchain SPL tokens : {} transferred from vault to taker: {} tokens",
+                offer.token_a_offered_amount,
+                ctx.accounts.external_buyer_sol.key()
+            );
+        }
+
+        // if you don't want on-chain state tracking, you can remove this line and just emit the event and close the offer account.
+        offer.is_swap_completed = true;
+
+        // emit logs
+        // TODO : need to update this and event
+        msg!(
+            "Interchain origin sol offer completed for trade id: {},buyer : {} , seller_sol: {},
+        seller_evm : {:?}, to buyer's sol address : {}, is_swap_completed: {}, token_a_offered_amount: {},token_b_wanted_amount: {}, is_taker_native: {}",
+            offer.trade_id,
+            offer.external_buyer_sol,
+            offer.seller_sol,
+            offer.seller_evm,
+            offer.external_buyer_sol,
+            offer.is_swap_completed,
+            offer.token_a_offered_amount,
+            offer.token_b_wanted_amount,
+            offer.is_taker_native
+        );
+
+        emit!(InterchainSwapCompletedEvent {
+            id: offer.trade_id,
+            buyer: ctx.accounts.external_buyer_sol.key(),
+            seller: ctx.accounts.seller_sol.key(),
             token_a_transferred: offer.token_a_offered_amount,
             token_b_transferred: offer.token_b_wanted_amount,
             is_swap_completed: true,
@@ -550,223 +770,6 @@ pub mod swap {
             token_b_wanted_amount,
             is_taker_native
         );
-
-        Ok(())
-    }
-
-    pub fn finalize_interchain_offer(ctx: Context<TakeInterchainOffer>, id: u64) -> Result<()> {
-        let offer = &mut ctx.accounts.offer;
-
-        // Ensure the offer has not already been filled.
-        require!(!offer.is_swap_completed, P2PError::SwapAlreadyCompleted);
-        // Prevent a maker from filling their own offer.
-        require!(
-            offer.buyer_sol != ctx.accounts.external_seller_sol.key(),
-            P2PError::MakerAndTakerCannotBeSame
-        );
-
-        msg!(
-            "Finalizing cross-chain swap: {} USDT from vault to seller {}",
-            offer.token_b_wanted_amount,
-            ctx.accounts.external_seller_sol.key()
-        );
-
-        // -------------------------------
-        // Step 1: Transfer Buyer's asset from vault to seller. for origin is EVM chain
-        // step 1: transfer seller's asset from vault to buyer for origin is SOL chain
-
-        if offer.is_native {
-            let vault_bump = ctx.bumps.vault_native;
-            let seeds: &[&[u8]] = &[b"vault-native", &[vault_bump]];
-            let signer_seeds = &[&seeds[..]];
-
-            // -------------------------------
-            let transfer_ix = anchor_lang::solana_program::system_instruction::transfer(
-                &ctx.accounts.vault_native.key(),
-                &ctx.accounts.external_seller_sol.key(),
-                offer.token_b_wanted_amount,
-            );
-
-            anchor_lang::solana_program::program::invoke_signed(
-                &transfer_ix,
-                &[
-                    ctx.accounts.vault_native.to_account_info(),
-                    ctx.accounts.external_seller_sol.to_account_info(),
-                    ctx.accounts.system_program.to_account_info(),
-                ],
-                signer_seeds,
-            )?;
-
-            msg!(
-                "Native SOL transferred {} lamports from native vault to seller.",
-                offer.token_b_wanted_amount
-            );
-        } else {
-            // Use the global authority PDA to sign for the vault.
-            let global_authority_seeds =
-                &[b"global-authority".as_ref(), &[ctx.bumps.global_authority]];
-
-            let signer_seeds = [&global_authority_seeds[..]];
-
-            token::transfer(
-                CpiContext::new_with_signer(
-                    ctx.accounts.token_program.to_account_info(),
-                    Transfer {
-                        from: ctx.accounts.vault_spl.to_account_info(),
-                        to: ctx
-                            .accounts
-                            .external_seller_sol_token_account_a
-                            .to_account_info(),
-                        authority: ctx.accounts.global_authority.to_account_info(),
-                    },
-                    &signer_seeds,
-                ),
-                offer.token_b_wanted_amount,
-            )?;
-
-            msg!(
-                "SPL tokens transferred from vault to taker: {} tokens",
-                offer.token_a_offered_amount
-            );
-        }
-
-        // if you don't want on-chain state tracking, you can remove this line and just emit the event and close the offer account.
-        offer.is_swap_completed = true;
-
-        // emit logs
-        msg!(
-            "Interchain offer completed for trade id: {},buyer : {} , external_seller_sol: {},
-        external_seller_evm : {:?}, is_swap_completed: {}, token_a_offered_amount: {},token_b_wanted_amount: {}, is_taker_native: {}",
-            offer.trade_id,
-            offer.buyer_sol,
-            offer.external_seller_sol,
-            offer.external_seller_evm,
-            offer.is_swap_completed,
-            offer.token_a_offered_amount,
-            offer.token_b_wanted_amount,
-            offer.is_taker_native
-        );
-
-        emit!(InterchainSwapCompletedEvent {
-            id: offer.trade_id,
-            buyer: ctx.accounts.buyer_sol.key(),
-            seller: ctx.accounts.external_seller_sol.key(),
-            token_a_transferred: offer.token_a_offered_amount,
-            token_b_transferred: offer.token_b_wanted_amount,
-            is_swap_completed: true,
-        });
-
-        Ok(())
-    }
-
-    pub fn finalize_interchain_origin_sol_offer(
-        ctx: Context<TakeInterchainOriginSolOffer>,
-        id: u64,
-    ) -> Result<()> {
-        let offer = &mut ctx.accounts.interchain_origin_sol_offer;
-
-        // Ensure the offer has not already been filled.
-        require!(!offer.is_swap_completed, P2PError::SwapAlreadyCompleted);
-        // Prevent a maker from filling their own offer.
-        require!(
-            offer.external_buyer_sol != ctx.accounts.seller_sol.key(),
-            P2PError::MakerAndTakerCannotBeSame
-        );
-
-        msg!(
-            "Finalizing cross-chain swap: {} USDT from vault to buyer {}",
-            offer.token_a_offered_amount,
-            ctx.accounts.external_buyer_sol.key()
-        );
-
-        // -------------------------------
-        // Step 1: Transfer Buyer's asset from vault to seller. for origin is EVM chain
-        // step 1: transfer seller's asset from vault to buyer for origin is SOL chain => external_seller_sol = buyer_sol and external_seller_sol_token_account_a = buyer_sol_token_account_a
-
-        if offer.is_native {
-            let vault_bump = ctx.bumps.vault_native;
-            let seeds: &[&[u8]] = &[b"vault-native", &[vault_bump]];
-            let signer_seeds = &[&seeds[..]];
-
-            // -------------------------------
-            let transfer_ix = anchor_lang::solana_program::system_instruction::transfer(
-                &ctx.accounts.vault_native.key(),
-                &ctx.accounts.external_buyer_sol.key(), //external_seller_sol = buyer_sol
-                offer.token_a_offered_amount,
-            );
-
-            anchor_lang::solana_program::program::invoke_signed(
-                &transfer_ix,
-                &[
-                    ctx.accounts.vault_native.to_account_info(),
-                    ctx.accounts.external_buyer_sol.to_account_info(), //external_seller_sol = buyer_sol
-                    ctx.accounts.system_program.to_account_info(),
-                ],
-                signer_seeds,
-            )?;
-
-            msg!(
-                "Native SOL transferred {} lamports from native vault to buyer : {}.",
-                offer.token_a_offered_amount,
-                offer.external_buyer_sol
-            );
-        } else {
-            // Use the global authority PDA to sign for the vault.
-            let global_authority_seeds =
-                &[b"global-authority".as_ref(), &[ctx.bumps.global_authority]];
-
-            let signer_seeds = [&global_authority_seeds[..]];
-
-            token::transfer(
-                CpiContext::new_with_signer(
-                    ctx.accounts.token_program.to_account_info(),
-                    Transfer {
-                        from: ctx.accounts.vault_spl.to_account_info(),
-                        to: ctx
-                            .accounts
-                            .external_buyer_sol_token_account_a //external_seller_sol_token_account_a = buyer_sol_token_account_a
-                            .to_account_info(),
-                        authority: ctx.accounts.global_authority.to_account_info(),
-                    },
-                    &signer_seeds,
-                ),
-                offer.token_a_offered_amount,
-            )?;
-
-            msg!(
-                "SPL tokens : {} transferred from vault to taker: {} tokens",
-                offer.token_a_offered_amount,
-                ctx.accounts.external_buyer_sol.key()
-            );
-        }
-
-        // if you don't want on-chain state tracking, you can remove this line and just emit the event and close the offer account.
-        offer.is_swap_completed = true;
-
-        // emit logs
-        // TODO : need to update this and event
-        msg!(
-            "Interchain origin sol offer completed for trade id: {},buyer : {} , seller_sol: {},
-        seller_evm : {:?}, to buyer's sol address : {}, is_swap_completed: {}, token_a_offered_amount: {},token_b_wanted_amount: {}, is_taker_native: {}",
-            offer.trade_id,
-            offer.external_buyer_sol,
-            offer.seller_sol,
-            offer.seller_evm,
-            offer.external_buyer_sol,
-            offer.is_swap_completed,
-            offer.token_a_offered_amount,
-            offer.token_b_wanted_amount,
-            offer.is_taker_native
-        );
-
-        emit!(InterchainSwapCompletedEvent {
-            id: offer.trade_id,
-            buyer: ctx.accounts.external_buyer_sol.key(),
-            seller: ctx.accounts.seller_sol.key(),
-            token_a_transferred: offer.token_a_offered_amount,
-            token_b_transferred: offer.token_b_wanted_amount,
-            is_swap_completed: true,
-        });
 
         Ok(())
     }

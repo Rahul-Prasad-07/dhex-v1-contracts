@@ -28,7 +28,7 @@
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
     "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check"
   },
-  "author": "",
+  "author": "Rahul Prasad",
   "license": "ISC",
   "description": ""
 }
