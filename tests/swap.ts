@@ -67,9 +67,9 @@ describe.skip("intrachain-seller", () => {
 
         const [vaultPda] = PublicKey.findProgramAddressSync(
             [
-                Buffer.from("vault-native")
-                // userA.publicKey.toBuffer(),
-                // idLE,
+                Buffer.from("vault-native"),
+                userA.publicKey.toBuffer(),
+                idLE,
             ],
             program.programId
         );
@@ -118,6 +118,7 @@ describe.skip("intrachain-seller", () => {
                 new BN(15000000000), // Token B wanted amount (15 CT)
                 new BN(100000000), // Token A (SOL) offered amount
                 false, // is_taker_native
+                new BN(Date.now() + 1000 * 60 * 60 * 24 * 7) // expiry after 7 days
 
             )
             .accounts({
@@ -127,6 +128,7 @@ describe.skip("intrachain-seller", () => {
                 offer: offerPda,
                 vault: vaultPda,
                 systemProgram: SystemProgram.programId,
+                clock: anchor.web3.SYSVAR_CLOCK_PUBKEY,
             })
             .signers([userA])
             .rpc();
@@ -177,7 +179,7 @@ describe.skip("intrachain-seller", () => {
 
         // Derive the global authority PDA
         const [globalAuthorityPda] = PublicKey.findProgramAddressSync(
-            [Buffer.from("global-authority")], // Fixed seed
+            [Buffer.from("global-authority"), userA.publicKey.toBuffer(), idLEspl], // Fixed seed
             program.programId
         );
         const vaultSplAta = getAssociatedTokenAddressSync(
@@ -202,7 +204,8 @@ describe.skip("intrachain-seller", () => {
             offerIdSpl,
             tokenBWantedAmount,
             tokenAOfferedAmount,
-            true // is_taker_native
+            true, // is_taker_native
+            new BN(Date.now() + 1000 * 60 * 60 * 24 * 7) // expiry after 7 days
         ).accounts({
             maker: userA.publicKey,
             tokenMintA: tokenMintA,
@@ -214,6 +217,7 @@ describe.skip("intrachain-seller", () => {
             tokenProgram: TOKEN_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            clock: anchor.web3.SYSVAR_CLOCK_PUBKEY,
         }).signers([userA]).rpc();
 
         console.log("SPL deposit txn signature:", txSPL);
@@ -252,7 +256,7 @@ describe.skip("intrachain-seller", () => {
 
 });
 
-describe.skip("intrachain-swap-buyer", () => {
+describe("intrachain-swap-buyer", () => {
 
     const provider = anchor.AnchorProvider.env();
     anchor.setProvider(provider);
@@ -262,7 +266,8 @@ describe.skip("intrachain-swap-buyer", () => {
 
     it.skip("take offer details test", async () => {
 
-        const offerAccount = await program.account.offer.fetch("52aJrS1wSH4yqSWDvdHQp9tcG5tX7FWw3NE5AyGn3ecJ");
+        console.log("\n--- Now logging native offer details from pda ---");
+        const offerAccount = await program.account.offer.fetch("3hdHCPBCtqhtqPiwgqzACZAttGAbhcFmPtxxCEjbVDmk");
         let offerId = offerAccount.id;
         let isNative = offerAccount.isNative;
         let isTakerNative = offerAccount.isTakerNative;
@@ -277,6 +282,22 @@ describe.skip("intrachain-swap-buyer", () => {
         console.log("Token B wanted amount:", tokenBWantedAmount.toString());
         console.log("Maker:", offerAccount.maker.toBase58());
 
+        console.log("\n--- Now logging SPL offer details from pda ---");
+        const offerAccountSpl = await program.account.offer.fetch("5BYtmTrbGCdzphoEvVCC7aKZe2jfSuKHadibuZhSwdJy");
+        let offerIdSpl = offerAccountSpl.id;
+        let isNativeSpl = offerAccountSpl.isNative;
+        let isTakerNativeSpl = offerAccountSpl.isTakerNative;
+        let tokenAOfferedAmountSpl = offerAccountSpl.tokenAOfferedAmount;
+        let tokenBWantedAmountSpl = offerAccountSpl.tokenBWantedAmount;
+
+        console.log("Offer ID:", offerIdSpl.toString());
+        console.log("isNative:", isNativeSpl);
+        console.log("isTakerNative:", isTakerNativeSpl);
+        console.log("Token A offered amount:", tokenAOfferedAmountSpl.toString());
+        console.log("Token B wanted amount:", tokenBWantedAmountSpl.toString());
+        console.log("Maker:", offerAccountSpl.maker.toBase58());
+
+
 
     });
 
@@ -286,7 +307,7 @@ describe.skip("intrachain-swap-buyer", () => {
         console.log("\n--- Now testing Intra-chain finalize_intrachain_offer ~ native test ---");
 
         //const randomSeed = crypto.randomBytes(4).readUInt32LE(0);
-        const offerId = new BN(1142545008);
+        const offerId = new BN(1270587822);
         console.log("Using Offer ID:", offerId.toString());
 
         const idLE = offerId.toArrayLike(Buffer, "le", 8);
@@ -301,26 +322,26 @@ describe.skip("intrachain-swap-buyer", () => {
 
         // Compute the global native vault PDA (seed: "vault-native")
         const [vaultNativePda] = PublicKey.findProgramAddressSync(
-            [Buffer.from("vault-native")],
+            [Buffer.from("vault-native"), userA.publicKey.toBuffer(), idLE],
             program.programId
         );
         // Compute the global authority PDA (seed: "global-authority")
         const [globalAuthorityPda] = PublicKey.findProgramAddressSync(
-            [Buffer.from("global-authority")],
+            [Buffer.from("global-authority"), userA.publicKey.toBuffer(), idLE],
             program.programId
         );
 
         // Compute the SPL vault ATA (even though not used for native deposit, it must be provided)
-        const vaultSplAta = getAssociatedTokenAddressSync(
-            tokenMintA,
-            globalAuthorityPda,
-            true,
-            TOKEN_PROGRAM_ID,
-            ASSOCIATED_TOKEN_PROGRAM_ID
-        );
+        // const vaultSplAta = getAssociatedTokenAddressSync(
+        //     tokenMintA,
+        //     globalAuthorityPda,
+        //     true,
+        //     TOKEN_PROGRAM_ID,
+        //     ASSOCIATED_TOKEN_PROGRAM_ID
+        // );
 
         console.log("Vault Native PDA:", vaultNativePda.toBase58());
-        console.log("Vault SPL ATA ", vaultSplAta.toBase58());
+        //console.log("Vault SPL ATA ", vaultSplAta.toBase58());
 
 
         // Taker's associated token account for token mint A (for receiving maker’s SPL deposit if applicable)
@@ -381,7 +402,7 @@ describe.skip("intrachain-swap-buyer", () => {
                 tokenMintB: tokenMintB,
                 offer: offerPda,
                 vaultNative: vaultNativePda,
-                vaultSpl: vaultSplAta,
+                vaultSpl: null, // not used in this scenario
                 globalAuthority: globalAuthorityPda,
                 takerTokenAccountA: takerTokenAccountA,
                 takerTokenAccountB: takerTokenAccountB,
@@ -389,6 +410,7 @@ describe.skip("intrachain-swap-buyer", () => {
                 tokenProgram: TOKEN_PROGRAM_ID,
                 systemProgram: SystemProgram.programId,
                 associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+                clock: anchor.web3.SYSVAR_CLOCK_PUBKEY,
             }
         ).signers([userB]).rpc();
 
@@ -424,7 +446,7 @@ describe.skip("intrachain-swap-buyer", () => {
         console.log("\n--- Now testing Intra-chain finalize_intrachain_offer ~ spl test ---");
 
         //const randomSeed = crypto.randomBytes(4).readUInt32LE(0);
-        const offerId = new BN(209892504);
+        const offerId = new BN(345977174);
         console.log("Using Offer ID:", offerId.toString());
 
         const idLE = offerId.toArrayLike(Buffer, "le", 8);
@@ -438,13 +460,13 @@ describe.skip("intrachain-swap-buyer", () => {
         console.log("Offer PDA:", offerPda.toBase58());
 
         // Compute the global native vault PDA (seed: "vault-native")
-        const [vaultNativePda] = PublicKey.findProgramAddressSync(
-            [Buffer.from("vault-native")],
-            program.programId
-        );
+        // const [vaultNativePda] = PublicKey.findProgramAddressSync(
+        //     [Buffer.from("vault-native"), userA.publicKey.toBuffer(), idLE],
+        //     program.programId
+        // );
         // Compute the global authority PDA (seed: "global-authority")
         const [globalAuthorityPda] = PublicKey.findProgramAddressSync(
-            [Buffer.from("global-authority")],
+            [Buffer.from("global-authority"), userA.publicKey.toBuffer(), idLE],
             program.programId
         );
 
@@ -457,7 +479,7 @@ describe.skip("intrachain-swap-buyer", () => {
             ASSOCIATED_TOKEN_PROGRAM_ID
         );
 
-        console.log("Vault Native PDA:", vaultNativePda.toBase58());
+        //console.log("Vault Native PDA:", vaultNativePda.toBase58());
         console.log("Vault SPL ATA ", vaultSplAta.toBase58());
 
 
@@ -500,8 +522,8 @@ describe.skip("intrachain-swap-buyer", () => {
         console.log(`transfering native sol : ${offerAccountBefore.tokenAOfferedAmount.toString()} from vault to userB and CT tokens(or native) : ${offerAccountBefore.tokenBWantedAmount.toString()} from userB to userA`);
 
         // check vault balance,UserB and UserA balance before swap
-        const vaultBalanceBefore = await provider.connection.getBalance(vaultNativePda);
-        console.log("Vault balance before swap:", vaultBalanceBefore);
+        // const vaultBalanceBefore = await provider.connection.getBalance(vaultNativePda);
+        //console.log("Vault balance before swap:", vaultBalanceBefore);
 
         const userBBalanceBefore = await provider.connection.getBalance(userB.publicKey);
         console.log("UserB balance before swap:", userBBalanceBefore);
@@ -518,7 +540,7 @@ describe.skip("intrachain-swap-buyer", () => {
                 tokenMintA: tokenMintA,
                 tokenMintB: tokenMintB,
                 offer: offerPda,
-                vaultNative: vaultNativePda,
+                vaultNative: null, // not used in this scenario
                 vaultSpl: vaultSplAta,
                 globalAuthority: globalAuthorityPda,
                 takerTokenAccountA: takerTokenAccountA,
@@ -527,14 +549,15 @@ describe.skip("intrachain-swap-buyer", () => {
                 tokenProgram: TOKEN_PROGRAM_ID,
                 systemProgram: SystemProgram.programId,
                 associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+                clock: anchor.web3.SYSVAR_CLOCK_PUBKEY,
             }
         ).signers([userB]).rpc();
 
         console.log("Take offer transaction signature:", tx);
 
         // chek vault balance,UserB and UserA balance after swap
-        const vaultBalanceAfter = await provider.connection.getBalance(vaultNativePda);
-        console.log("Vault balance after swap:", vaultBalanceAfter);
+        //const vaultBalanceAfter = await provider.connection.getBalance(vaultNativePda);
+        //console.log("Vault balance after swap:", vaultBalanceAfter);
 
         const userBBalanceAfter = await provider.connection.getBalance(userB.publicKey);
         console.log("UserB balance after swap:", userBBalanceAfter);

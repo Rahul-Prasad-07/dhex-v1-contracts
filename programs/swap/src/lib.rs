@@ -19,8 +19,16 @@ pub mod swap {
         token_b_wanted_amount: u64,
         sol_offered_amount: u64,
         is_taker_native: bool,
+        deadline: i64,
     ) -> Result<()> {
-        require!(sol_offered_amount > 0, P2PError::InvalidAmount);
+        require!(
+            sol_offered_amount > 0 && token_b_wanted_amount > 0,
+            P2PError::InvalidAmount
+        );
+        require!(
+            deadline > ctx.accounts.clock.unix_timestamp,
+            P2PError::InvalidDeadline
+        );
 
         // Transfer SOL from maker to the system-owned vault.
         let transfer_ix = anchor_lang::solana_program::system_instruction::transfer(
@@ -55,6 +63,7 @@ pub mod swap {
             is_native: true,
             is_taker_native,
             is_swap_completed: false,
+            deadline,
             bump: ctx.bumps.offer,
         });
 
@@ -78,8 +87,30 @@ pub mod swap {
         token_b_wanted_amount: u64,
         token_a_offered_amount: u64,
         is_taker_native: bool,
+        deadline: i64,
     ) -> Result<()> {
-        require!(token_a_offered_amount > 0, P2PError::InvalidAmount);
+        require!(
+            token_a_offered_amount > 0 && token_b_wanted_amount > 0,
+            P2PError::InvalidAmount
+        );
+        require!(
+            deadline > ctx.accounts.clock.unix_timestamp,
+            P2PError::InvalidDeadline
+        );
+
+        let expected_authority = Pubkey::find_program_address(
+            &[
+                b"global-authority",
+                ctx.accounts.maker.key().as_ref(),
+                id.to_le_bytes().as_ref(),
+            ],
+            ctx.program_id,
+        )
+        .0;
+        require!(
+            ctx.accounts.global_authority.key() == expected_authority,
+            P2PError::InvalidAuthority
+        );
 
         // Transfer SPL tokens from the maker's token account to the vault (ATA owned by Offer).
         // We can use the anchor_spl::token::transfer CPI:
@@ -94,6 +125,11 @@ pub mod swap {
             ),
             token_a_offered_amount,
         )?;
+        ctx.accounts.vault_spl.reload()?;
+        require!(
+            ctx.accounts.vault_spl.amount >= token_a_offered_amount,
+            P2PError::TransferFailed
+        );
         msg!(
             "Intrachain SPL token transfer completed: {} tokens moved into vault.",
             token_a_offered_amount
@@ -110,6 +146,7 @@ pub mod swap {
             is_native: false,
             is_taker_native,
             is_swap_completed: false,
+            deadline,
             bump: ctx.bumps.offer,
         });
 
@@ -359,15 +396,50 @@ pub mod swap {
             offer.maker != ctx.accounts.taker.key(),
             P2PError::MakerAndTakerCannotBeSame
         );
+        require!(
+            ctx.accounts.clock.unix_timestamp < offer.deadline,
+            P2PError::OfferExpired
+        );
+
+        // let expected_vault = Pubkey::find_program_address(
+        //     &[
+        //         b"vault-native",
+        //         offer.maker.as_ref(),
+        //         id.to_le_bytes().as_ref(),
+        //     ],
+        //     ctx.program_id,
+        // )
+        // .0;
+        // let expected_vault_authority = Pubkey::find_program_address(
+        //     &[b"vault-authority", offer.maker.as_ref(), id.to_le_bytes().as_ref()],
+        //     ctx.program_id,
+        // )
+        // .0;
 
         if offer.is_native {
-            let vault_bump = ctx.bumps.vault_native;
-            let seeds: &[&[u8]] = &[b"vault-native", &[vault_bump]];
+            require!(
+                ctx.accounts
+                    .vault_native
+                    .as_ref()
+                    .unwrap()
+                    .to_account_info()
+                    .lamports()
+                    >= offer.token_a_offered_amount,
+                P2PError::InsufficientFunds
+            );
+            let vault_bump = ctx.bumps.vault_native.unwrap();
+            let id_bytes = id.to_le_bytes();
+            let seeds: &[&[u8]] = &[
+                b"vault-native",
+                offer.maker.as_ref(),
+                &id_bytes,
+                &[vault_bump],
+            ];
             let signer_seeds = &[&seeds[..]];
 
             // -------------------------------
             let transfer_ix = anchor_lang::solana_program::system_instruction::transfer(
-                &ctx.accounts.vault_native.key(),
+                &ctx.accounts.vault_native.as_ref().unwrap().key(),
                 &ctx.accounts.taker.key(),
                 offer.token_a_offered_amount,
             );
@@ -375,7 +447,11 @@ pub mod swap {
             anchor_lang::solana_program::program::invoke_signed(
                 &transfer_ix,
                 &[
-                    ctx.accounts.vault_native.to_account_info(),
+                    ctx.accounts
+                        .vault_native
+                        .as_ref()
+                        .unwrap()
+                        .to_account_info(),
                     ctx.accounts.taker.to_account_info(),
                     ctx.accounts.system_program.to_account_info(),
                 ],
@@ -386,10 +462,62 @@ pub mod swap {
                 "Intrachain Native SOL transferred {} lamports from native vault to taker.",
                 offer.token_a_offered_amount
             );
+
+            // now refund the remaining lamports to the maker and close the vault account
+            // Reload vault to get updated balance
+            // &ctx.accounts.vault_native.reload()?;
+            let remaining_lamports = ctx.accounts.vault_native.as_ref().unwrap().lamports();
+
+            if remaining_lamports > 0 {
+                let transfer_ix = anchor_lang::solana_program::system_instruction::transfer(
+                    &ctx.accounts.vault_native.as_ref().unwrap().key(),
+                    &ctx.accounts.maker.key(),
+                    remaining_lamports,
+                );
+
+                anchor_lang::solana_program::program::invoke_signed(
+                    &transfer_ix,
+                    &[
+                        ctx.accounts
+                            .vault_native
+                            .as_ref()
+                            .unwrap()
+                            .to_account_info(),
+                        ctx.accounts.maker.to_account_info(),
+                        ctx.accounts.system_program.to_account_info(),
+                    ],
+                    signer_seeds,
+                )?;
+                msg!(
+                    "Intrachain Native SOL refunded {} lamports to maker.",
+                    remaining_lamports
+                );
+            }
+
+            // // close the vault account
+            // token::close_account(CpiContext::new_with_signer(
+            //     ctx.accounts.token_program.to_account_info(),
+            //     token::CloseAccount {
+            //         account: ctx.accounts.vault_native.as_ref().unwrap().to_account_info(),
+            //         destination: ctx.accounts.maker.to_account_info(),
+            //         authority: ctx.accounts.global_authority.to_account_info(),
+            //     },
+            //     signer_seeds,
+            // ))?;
+            // msg!("Vault account closed.");
         } else {
+            require!(
+                ctx.accounts.vault_spl.as_ref().unwrap().amount >= offer.token_a_offered_amount,
+                P2PError::InsufficientFunds
+            );
             // Use the global authority PDA to sign for the vault.
-            let global_authority_seeds =
-                &[b"global-authority".as_ref(), &[ctx.bumps.global_authority]];
+            let id_bytes = id.to_le_bytes();
+            let global_authority_seeds = &[
+                b"global-authority".as_ref(),
+                offer.maker.as_ref(),
+                &id_bytes,
+                &[ctx.bumps.global_authority],
+            ];
 
             let signer_seeds = [&global_authority_seeds[..]];
 
@@ -397,7 +525,7 @@ pub mod swap {
                 CpiContext::new_with_signer(
                     ctx.accounts.token_program.to_account_info(),
                     Transfer {
-                        from: ctx.accounts.vault_spl.to_account_info(),
+                        from: ctx.accounts.vault_spl.as_ref().unwrap().to_account_info(),
                         to: ctx.accounts.taker_token_account_a.to_account_info(),
                         authority: ctx.accounts.global_authority.to_account_info(),
                     },
@@ -410,6 +538,19 @@ pub mod swap {
                 "Intrachain SPL tokens transferred from vault to taker: {} tokens",
                 offer.token_a_offered_amount
             );
+
+            // close the vault account
+            token::close_account(CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                token::CloseAccount {
+                    account: ctx.accounts.vault_spl.as_ref().unwrap().to_account_info(),
+                    destination: ctx.accounts.maker.to_account_info(),
+                    authority: ctx.accounts.global_authority.to_account_info(),
+                },
+                &signer_seeds,
+            ))?;
+
+            msg!("Vault account closed.");
         }
 
         // -------------------------------
@@ -966,23 +1107,24 @@ pub struct TakeOffer<'info> {
     /// CHECK: This is a PDA used as the authority for the global vault.
     #[account(
         mut,
-        seeds = [b"vault-native"],
+        seeds = [b"vault-native", maker.key().as_ref(), id.to_le_bytes().as_ref()],
         bump
     )]
-    pub vault_native: AccountInfo<'info>,
+    pub vault_native: Option<AccountInfo<'info>>, // System-owned, no data
 
     #[account(
         mut,
         associated_token::mint = token_mint_a,
         associated_token::authority = global_authority,
+        constraint =  vault_spl.owner == global_authority.key()
     )]
-    pub vault_spl: Account<'info, TokenAccount>,
+    pub vault_spl: Option<Account<'info, TokenAccount>>,
 
     /// CHECK: This is a PDA used as the authority for the global vault.
     /// It does not need additional validation because it's derived using `seeds = [b"global-authority"]`.
     #[account(
         mut,
-        seeds = [b"global-authority"],
+        seeds = [b"global-authority", maker.key().as_ref(), id.to_le_bytes().as_ref()],
         bump
     )]
     pub global_authority: AccountInfo<'info>,
@@ -1012,6 +1154,7 @@ pub struct TakeOffer<'info> {
     pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
+    pub clock: Sysvar<'info, Clock>,
 }
 
 /// Context for depositing raw SOL
@@ -1056,16 +1199,17 @@ pub struct MakeOfferNative<'info> {
     /// **Important:** This vault is a system account with ZERO data (space = 0)
     /// so that the system transfer instruction does not error.
     #[account(
-        init_if_needed,
+        init,
         payer = maker,
-        space = 0,
-        seeds = [b"vault-native"],
+        space = 0, // No data for SystemProgram compatibility to achive system transfer, now we need to close this account mannually
+        seeds = [b"vault-native", maker.key().as_ref(), id.to_le_bytes().as_ref()],
         bump,
         owner = system_program::ID
     )]
     pub vault: AccountInfo<'info>, // Program-owned account
 
     pub system_program: Program<'info, System>,
+    pub clock: Sysvar<'info, Clock>,
 }
 
 /// Context for depositing raw SOL
@@ -1237,7 +1381,7 @@ pub struct MakeOfferSpl<'info> {
     pub offer: Account<'info, Offer>,
 
     #[account(
-        init_if_needed,
+        init,
         payer = maker,
         associated_token::mint = token_mint_a,
         associated_token::authority = global_authority,
@@ -1248,7 +1392,7 @@ pub struct MakeOfferSpl<'info> {
     /// CHECK: This is a PDA used as the authority for the global vault.
     /// It does not need additional validation because it's derived using `seeds = [b"global-authority"]`.
     #[account(
-        seeds = [b"global-authority"], // ✅ Fixed PDA seed
+        seeds = [b"global-authority", maker.key().as_ref(), id.to_le_bytes().as_ref()], // ✅ Fixed PDA seed
         bump
     )]
     pub global_authority: AccountInfo<'info>,
@@ -1256,6 +1400,7 @@ pub struct MakeOfferSpl<'info> {
     pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
+    pub clock: Sysvar<'info, Clock>,
 }
 
 #[derive(Accounts)]
@@ -1388,11 +1533,15 @@ pub struct InterchainMakeOfferSpl<'info> {
     pub associated_token_program: Program<'info, AssociatedToken>,
 }
 
-// /// Single global SOL vault data.
-// #[account]
-// pub struct GlobalSolVault {
-//     pub bump: u8, // Could store more fields if you want
-// }
+// Data Structures
+#[account]
+pub struct VaultNative {
+    pub bump: u8,
+}
+
+impl VaultNative {
+    pub const SIZE: usize = 1; // Just the bump
+}
 
 /// Offer data.
 #[account]
@@ -1406,6 +1555,7 @@ pub struct Offer {
     pub is_native: bool,
     pub is_taker_native: bool,
     pub is_swap_completed: bool,
+    pub deadline: i64,
     pub bump: u8,
 }
 
@@ -1420,7 +1570,9 @@ impl Offer {
         + 1                     // is_native
         + 1
         + 1                     // is_swap_completed
-        + 1; // is_taker_nativ
+        + 8                     // deadline
+        + 1                     // is_taker_nativ
+        + 6; // padding
 }
 
 #[account]
@@ -1600,4 +1752,26 @@ pub enum P2PError {
     SwapAlreadyCompleted,
     #[msg("Maker and taker cannot be the same.")]
     MakerAndTakerCannotBeSame,
+    #[msg("Vault already initialized.")]
+    VaultAlreadyInitialized,
+    #[msg("Invalid authority.")]
+    InvalidAuthority,
+    #[msg("Transfer failed.")]
+    TransferFailed,
+    #[msg("Insufficient funds in vault.")]
+    InsufficientFunds,
+    #[msg("Offer expired.")]
+    OfferExpired,
+    #[msg("Invalid EVM address.")]
+    InvalidEvmAddress,
+    #[msg("Invalid vault.")]
+    InvalidVault,
+    #[msg("Invalid owner.")]
+    InvalidOwner,
+    #[msg("Unauthorized relayer.")]
+    UnauthorizedRelayer,
+    #[msg("Invalid deadline.")]
+    InvalidDeadline,
+    #[msg("Invalid chain ID.")]
+    InvalidChainId,
 }
