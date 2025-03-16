@@ -240,7 +240,6 @@ pub mod swap {
     /// Interchain => Origin is EVM chain
     /// For depositing **raw SOL** into a System-owned vault.
     /// offer account is created by relay_offer_clone
-    // TODO --> FIX : I am able to add funds multiple times on the same relayed offer
     pub fn interchain_origin_evm_deposit_seller_native(
         ctx: Context<InterchainMakeOfferNative>,
         id: u64,
@@ -379,7 +378,6 @@ pub mod swap {
     }
 
     /// Interchain => Origin is EVM chain
-    // TODO --> FIX : I am able to add funds multiple times on the same relayed offer
     pub fn interchain_origin_evm_deposit_seller_spl(
         ctx: Context<InterchainMakeOfferSpl>,
         id: u64,
